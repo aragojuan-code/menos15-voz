@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>-15% Voz</title>
+  <style>
+    :root{
+      --bg:#0b0f14;
+      --ink:#eaf2ff;
+      --muted:rgba(234,242,255,.55);
+      --btn:rgba(234,242,255,.18);
+      --btnOn:#eaf2ff;
+      --shadow: rgba(0,0,0,.35);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      background:var(--bg);
+      color:var(--ink);
+      font-family: ui-rounded, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+    }
+    .wrap{
+      width:min(420px, 92vw);
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      gap:18px;
+      text-align:center;
+      padding:28px 18px;
+    }
+    .hint{
+      font-size:14px;
+      color:var(--muted);
+      line-height:1.35;
+      min-height:38px;
+    }
+    .value{
+      font-size:44px;
+      letter-spacing:.02em;
+      font-weight:650;
+      min-height:54px;
+    }
+    .chip{
+      font-size:13px;
+      color:var(--muted);
+      padding:6px 10px;
+      border:1px solid rgba(234,242,255,.12);
+      border-radius:999px;
+      user-select:none;
+    }
+    .mic{
+      width:120px;height:120px;border-radius:999px;
+      background:var(--btn);
+      border:1px solid rgba(234,242,255,.12);
+      box-shadow: 0 18px 60px var(--shadow);
+      display:grid;place-items:center;
+      cursor:pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: transform .08s ease, background .12s ease;
+      user-select:none;
+      touch-action:none;
+    }
+    .mic:active{ transform: scale(.98); }
+    .mic.on{
+      background:var(--btnOn);
+      color:#0b0f14;
+    }
+    .mic svg{ width:40px;height:40px; }
+    .small{
+      font-size:12px;color:var(--muted);
+      opacity:.85;
+    }
+    .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+    a{color:var(--muted); text-decoration:none; border-bottom:1px dotted rgba(234,242,255,.25)}
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="chip">Di un número → te digo ⌊0,85×n⌋</div>
+
+    <div class="value" id="result">—</div>
+    <div class="hint" id="status">Mantén pulsado el micro, di “54”, suelta.</div>
+
+    <div class="mic" id="mic" aria-label="Hablar" role="button">
+      <!-- mic icon -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z"/>
+        <path d="M19 11a7 7 0 0 1-14 0"/>
+        <path d="M12 19v3"/>
+        <path d="M8 22h8"/>
+      </svg>
+    </div>
+
+    <div class="row">
+      <div class="small" id="heard"></div>
+    </div>
+
+    <div class="small" id="compat"></div>
+  </div>
+
+<script>
+(() => {
+  const $mic    = document.getElementById('mic');
+  const $status = document.getElementById('status');
+  const $result = document.getElementById('result');
+  const $heard  = document.getElementById('heard');
+  const $compat = document.getElementById('compat');
+
+  // --- Compat ---
+  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const canRec = !!SpeechRec;
+  const canTTS = 'speechSynthesis' in window;
+
+  $compat.textContent = canRec
+    ? 'Reconocimiento: OK · Voz: ' + (canTTS ? 'OK' : 'No')
+    : 'Tu navegador no soporta reconocimiento de voz (en iPhone/Safari suele pasar).';
+
+  // --- TTS ---
+  function speak(text){
+    if(!canTTS) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(String(text));
+    // intenta español
+    u.lang = 'es-ES';
+    u.rate = 1.0;
+    window.speechSynthesis.speak(u);
+  }
+
+  // --- Parse número (acepta "54", "54,5", "1.000", etc.) ---
+  function parseNumber(raw){
+    if(!raw) return null;
+    const t = raw
+      .toLowerCase()
+      .replaceAll('€','')
+      .replaceAll('%','')
+      .replace(/\s+/g,'')
+      .replace(/\.(?=\d{3}(\D|$))/g,'') // quita separador miles tipo 1.000
+      .replaceAll(',','.');             // decimal europeo -> punto
+    const m = t.match(/-?\d+(\.\d+)?/);
+    if(!m) return null;
+    const n = Number(m[0]);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  // --- Regla: sin decimales y 15% o MÁS (nunca menos) ---
+  // Para n>=0 => floor(n*0.85) garantiza <= exacto.
+  function discountFloor15(n){
+    if(n >= 0) return Math.floor(n * 0.85);
+    // si algún día dictas negativos, para cumplir “nunca menos” habría que definirlo;
+    // aquí lo dejamos simple:
+    return Math.floor(n * 0.85);
+  }
+
+  // --- Speech Recognition ---
+  let rec = null;
+  let finalText = '';
+
+  function start(){
+    if(!canRec){
+      $status.textContent = 'Este navegador no puede escucharte. Usa Chrome/Edge o dime si quieres versión con Whisper.';
+      speak('Este navegador no puede reconocer voz.');
+      return;
+    }
+
+    finalText = '';
+    $heard.textContent = '';
+    $status.textContent = 'Escuchando…';
+    $mic.classList.add('on');
+
+    rec = new SpeechRec();
+    rec.lang = 'es-ES';
+    rec.interimResults = true;
+    rec.continuous = false;
+
+    rec.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++){
+        const txt = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += txt;
+        else interim += txt;
+      }
+      const shown = (finalText || interim || '').trim();
+      $heard.textContent = shown ? `Oído: ${shown}` : '';
+    };
+
+    rec.onerror = () => {
+      $status.textContent = 'No te he entendido.';
+      $mic.classList.remove('on');
+    };
+
+    rec.onend = () => {
+      $mic.classList.remove('on');
+      const heard = (finalText || '').trim();
+      if(!heard){
+        $status.textContent = 'Di solo un número (ej: “54”).';
+        speak('No he entendido el número.');
+        return;
+      }
+      const n = parseNumber(heard);
+      if(n === null){
+        $status.textContent = 'Di solo un número (ej: “54”).';
+        speak('No he entendido el número.');
+        return;
+      }
+      const r = discountFloor15(n);
+      $result.textContent = r;
+      $status.textContent = 'Listo.';
+      speak(r);
+    };
+
+    try { rec.start(); }
+    catch {
+      $status.textContent = 'No puedo iniciar el micro (permiso?).';
+      $mic.classList.remove('on');
+    }
+  }
+
+  function stop(){
+    if(rec){
+      try { rec.stop(); } catch {}
+    }
+  }
+
+  // --- UX: mantener pulsado para hablar (mouse + touch) ---
+  const down = (e) => { e.preventDefault(); start(); };
+  const up   = (e) => { e.preventDefault(); stop(); };
+
+  $mic.addEventListener('pointerdown', down);
+  window.addEventListener('pointerup', up);
+
+})();
+</script>
+</body>
+</html>

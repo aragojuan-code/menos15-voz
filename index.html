@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>-15% Voz</title>
+  <title>Menos 15 · Voz</title>
   <style>
     :root{
       --bg:#0b0f14;
@@ -63,7 +63,10 @@
       -webkit-tap-highlight-color: transparent;
       transition: transform .08s ease, background .12s ease;
       user-select:none;
+
+      /* clave para móvil: evita scroll/gestos que cancelan el hold */
       touch-action:none;
+      -webkit-user-select:none;
     }
     .mic:active{ transform: scale(.98); }
     .mic.on{
@@ -76,7 +79,6 @@
       opacity:.85;
     }
     .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
-    a{color:var(--muted); text-decoration:none; border-bottom:1px dotted rgba(234,242,255,.25)}
   </style>
 </head>
 
@@ -88,7 +90,6 @@
     <div class="hint" id="status">Mantén pulsado el micro, di “54”, suelta.</div>
 
     <div class="mic" id="mic" aria-label="Hablar" role="button">
-      <!-- mic icon -->
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z"/>
@@ -120,14 +121,13 @@
 
   $compat.textContent = canRec
     ? 'Reconocimiento: OK · Voz: ' + (canTTS ? 'OK' : 'No')
-    : 'Tu navegador no soporta reconocimiento de voz (en iPhone/Safari suele pasar).';
+    : 'Este navegador no soporta reconocimiento de voz (iPhone/Safari suele fallar).';
 
   // --- TTS ---
   function speak(text){
     if(!canTTS) return;
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(String(text));
-    // intenta español
     u.lang = 'es-ES';
     u.rate = 1.0;
     window.speechSynthesis.speak(u);
@@ -150,11 +150,8 @@
   }
 
   // --- Regla: sin decimales y 15% o MÁS (nunca menos) ---
-  // Para n>=0 => floor(n*0.85) garantiza <= exacto.
   function discountFloor15(n){
-    if(n >= 0) return Math.floor(n * 0.85);
-    // si algún día dictas negativos, para cumplir “nunca menos” habría que definirlo;
-    // aquí lo dejamos simple:
+    // para n>=0: floor(n*0.85) garantiza descuento >=15%
     return Math.floor(n * 0.85);
   }
 
@@ -164,7 +161,7 @@
 
   function start(){
     if(!canRec){
-      $status.textContent = 'Este navegador no puede escucharte. Usa Chrome/Edge o dime si quieres versión con Whisper.';
+      $status.textContent = 'Este navegador no puede escucharte. Usa Chrome/Edge o versión con Whisper.';
       speak('Este navegador no puede reconocer voz.');
       return;
     }
@@ -228,12 +225,48 @@
     }
   }
 
-  // --- UX: mantener pulsado para hablar (mouse + touch) ---
-  const down = (e) => { e.preventDefault(); start(); };
-  const up   = (e) => { e.preventDefault(); stop(); };
+  // ==============================
+  // UX: mantener pulsado (móvil ok)
+  // ==============================
 
-  $mic.addEventListener('pointerdown', down);
-  window.addEventListener('pointerup', up);
+  // Evita menú de pulsación larga (iOS/Android)
+  $mic.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  let isPressed = false;
+
+  const pressStart = (e) => {
+    e.preventDefault();
+    if (isPressed) return;
+    isPressed = true;
+
+    // Captura el puntero para asegurar "end"
+    if (e.pointerId != null && $mic.setPointerCapture) {
+      try { $mic.setPointerCapture(e.pointerId); } catch {}
+    }
+    start();
+  };
+
+  const pressEnd = (e) => {
+    e.preventDefault();
+    if (!isPressed) return;
+    isPressed = false;
+    stop();
+  };
+
+  // Pointer events
+  $mic.addEventListener('pointerdown', pressStart, { passive: false });
+  $mic.addEventListener('pointerup', pressEnd, { passive: false });
+  $mic.addEventListener('pointercancel', pressEnd, { passive: false });
+  $mic.addEventListener('pointerleave', pressEnd, { passive: false });
+
+  // Touch fallback (iOS Safari)
+  $mic.addEventListener('touchstart', pressStart, { passive: false });
+  $mic.addEventListener('touchend', pressEnd, { passive: false });
+  $mic.addEventListener('touchcancel', pressEnd, { passive: false });
+
+  // Mouse fallback
+  $mic.addEventListener('mousedown', pressStart, { passive: false });
+  window.addEventListener('mouseup', pressEnd, { passive: false });
 
 })();
 </script>

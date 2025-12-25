@@ -63,9 +63,7 @@
       -webkit-tap-highlight-color: transparent;
       transition: transform .08s ease, background .12s ease;
       user-select:none;
-
-      /* clave para móvil: evita scroll/gestos que cancelan el hold */
-      touch-action:none;
+      touch-action:none;            /* clave móvil */
       -webkit-user-select:none;
     }
     .mic:active{ transform: scale(.98); }
@@ -121,16 +119,53 @@
 
   $compat.textContent = canRec
     ? 'Reconocimiento: OK · Voz: ' + (canTTS ? 'OK' : 'No')
-    : 'Este navegador no soporta reconocimiento de voz (iPhone/Safari suele fallar).';
+    : 'Este navegador no soporta reconocimiento de voz (iPhone/Safari a veces falla).';
 
-  // --- TTS ---
+  // --- TTS (con “unlock” iOS) ---
+  let ttsUnlocked = false;
+
+  function pickSpanishVoice() {
+    const voices = window.speechSynthesis?.getVoices?.() || [];
+    // Prioriza es-ES; si no, cualquier "es"
+    return voices.find(v => (v.lang || '').toLowerCase().startsWith('es-es'))
+        || voices.find(v => (v.lang || '').toLowerCase().startsWith('es'))
+        || null;
+  }
+
+  function unlockTTS() {
+    if (!canTTS || ttsUnlocked) return;
+    // "Desbloqueo" típico iOS: una utterance muda muy corta durante el gesto
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(' ');
+      u.lang = 'es-ES';
+      u.volume = 0;     // mudo
+      u.rate = 1.0;
+      u.voice = pickSpanishVoice() || undefined;
+      window.speechSynthesis.speak(u);
+      // no canceles inmediatamente: a veces iOS necesita que “arranque”
+      ttsUnlocked = true;
+    } catch {}
+  }
+
+  // fuerza carga de voces (algunos navegadores las cargan async)
+  if (canTTS) {
+    window.speechSynthesis.onvoiceschanged = () => {};
+    window.speechSynthesis.getVoices();
+  }
+
   function speak(text){
     if(!canTTS) return;
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(String(text));
-    u.lang = 'es-ES';
-    u.rate = 1.0;
-    window.speechSynthesis.speak(u);
+    try {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.resume(); // iOS a veces se queda “paused”
+      const u = new SpeechSynthesisUtterance(String(text));
+      u.lang = 'es-ES';
+      u.rate = 1.0;
+      u.volume = 1.0;
+      u.voice = pickSpanishVoice() || undefined;
+      window.speechSynthesis.speak(u);
+    } catch {}
   }
 
   // --- Parse número (acepta "54", "54,5", "1.000", etc.) ---
@@ -141,7 +176,7 @@
       .replaceAll('€','')
       .replaceAll('%','')
       .replace(/\s+/g,'')
-      .replace(/\.(?=\d{3}(\D|$))/g,'') // quita separador miles tipo 1.000
+      .replace(/\.(?=\d{3}(\D|$))/g,'') // quita miles tipo 1.000
       .replaceAll(',','.');             // decimal europeo -> punto
     const m = t.match(/-?\d+(\.\d+)?/);
     if(!m) return null;
@@ -151,7 +186,6 @@
 
   // --- Regla: sin decimales y 15% o MÁS (nunca menos) ---
   function discountFloor15(n){
-    // para n>=0: floor(n*0.85) garantiza descuento >=15%
     return Math.floor(n * 0.85);
   }
 
@@ -226,23 +260,28 @@
   }
 
   // ==============================
-  // UX: mantener pulsado (móvil ok)
+  // UX: mantener pulsado (FIX Android+iOS)
   // ==============================
 
-  // Evita menú de pulsación larga (iOS/Android)
+  // Evita menú de pulsación larga
   $mic.addEventListener('contextmenu', (e) => e.preventDefault());
 
   let isPressed = false;
 
   const pressStart = (e) => {
+    // IMPORTANTÍSIMO: evita que touch dispare click/scroll
     e.preventDefault();
     if (isPressed) return;
     isPressed = true;
 
-    // Captura el puntero para asegurar "end"
+    // Unlock TTS en el gesto (arregla “iPhone entiende pero no habla”)
+    unlockTTS();
+
+    // Captura puntero si aplica
     if (e.pointerId != null && $mic.setPointerCapture) {
       try { $mic.setPointerCapture(e.pointerId); } catch {}
     }
+
     start();
   };
 
@@ -253,20 +292,23 @@
     stop();
   };
 
-  // Pointer events
-  $mic.addEventListener('pointerdown', pressStart, { passive: false });
-  $mic.addEventListener('pointerup', pressEnd, { passive: false });
-  $mic.addEventListener('pointercancel', pressEnd, { passive: false });
-  $mic.addEventListener('pointerleave', pressEnd, { passive: false });
+  // ✅ CLAVE: si hay Pointer Events, usamos SOLO pointer (evita doble firing en Android)
+  const usePointer = 'PointerEvent' in window;
 
-  // Touch fallback (iOS Safari)
-  $mic.addEventListener('touchstart', pressStart, { passive: false });
-  $mic.addEventListener('touchend', pressEnd, { passive: false });
-  $mic.addEventListener('touchcancel', pressEnd, { passive: false });
+  if (usePointer) {
+    $mic.addEventListener('pointerdown', pressStart, { passive: false });
+    $mic.addEventListener('pointerup', pressEnd, { passive: false });
+    $mic.addEventListener('pointercancel', pressEnd, { passive: false });
+    $mic.addEventListener('pointerleave', pressEnd, { passive: false });
+  } else {
+    // Fallback antiguo
+    $mic.addEventListener('touchstart', pressStart, { passive: false });
+    $mic.addEventListener('touchend', pressEnd, { passive: false });
+    $mic.addEventListener('touchcancel', pressEnd, { passive: false });
 
-  // Mouse fallback
-  $mic.addEventListener('mousedown', pressStart, { passive: false });
-  window.addEventListener('mouseup', pressEnd, { passive: false });
+    $mic.addEventListener('mousedown', pressStart, { passive: false });
+    window.addEventListener('mouseup', pressEnd, { passive: false });
+  }
 
 })();
 </script>

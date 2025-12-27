@@ -2,297 +2,190 @@
 <html lang="es">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Menos 15 · Voz</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>85% por voz</title>
+
   <style>
-    :root{
-      --bg:#0b0f14;
-      --ink:#eaf2ff;
-      --muted:rgba(234,242,255,.55);
-      --btn:rgba(234,242,255,.18);
-      --btnOn:#eaf2ff;
-      --shadow: rgba(0,0,0,.35);
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      margin: 24px;
+      max-width: 700px;
     }
-    *{box-sizing:border-box}
-    html,body{height:100%}
-    body{
-      margin:0;
-      background:var(--bg);
-      color:var(--ink);
-      font-family: ui-rounded, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-      display:flex;
-      align-items:center;
-      justify-content:center;
+
+    button {
+      font-size: 18px;
+      padding: 14px 20px;
+      border-radius: 14px;
+      border: none;
+      cursor: pointer;
     }
-    .wrap{
-      width:min(420px, 92vw);
-      display:flex;
-      flex-direction:column;
-      align-items:center;
-      gap:18px;
-      text-align:center;
-      padding:28px 18px;
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
     }
-    .hint{
-      font-size:14px;
-      color:var(--muted);
-      line-height:1.35;
-      min-height:38px;
+
+    .card {
+      margin-top: 20px;
+      padding: 16px;
+      border: 1px solid #ddd;
+      border-radius: 14px;
     }
-    .value{
-      font-size:44px;
-      letter-spacing:.02em;
-      font-weight:650;
-      min-height:54px;
+
+    .row {
+      margin: 8px 0;
     }
-    .chip{
-      font-size:13px;
-      color:var(--muted);
-      padding:6px 10px;
-      border:1px solid rgba(234,242,255,.12);
-      border-radius:999px;
-      user-select:none;
+
+    .label {
+      font-weight: bold;
     }
-    .mic{
-      width:120px;height:120px;border-radius:999px;
-      background:var(--btn);
-      border:1px solid rgba(234,242,255,.12);
-      box-shadow: 0 18px 60px var(--shadow);
-      display:grid;place-items:center;
-      cursor:pointer;
-      -webkit-tap-highlight-color: transparent;
-      transition: transform .08s ease, background .12s ease;
-      user-select:none;
-      -webkit-user-select:none;
-      touch-action:manipulation;
+
+    .mono {
+      font-family: monospace;
     }
-    .mic:active{ transform: scale(.98); }
-    .mic.on{
-      background:var(--btnOn);
-      color:#0b0f14;
+
+    .small {
+      font-size: 13px;
+      opacity: 0.8;
     }
-    .mic svg{ width:40px;height:40px; }
-    .small{ font-size:12px; color:var(--muted); opacity:.85; }
-    .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
   </style>
 </head>
 
 <body>
-  <div class="wrap">
-    <div class="chip">Toca una vez → habla → suelta silencio → ⌊0,85×n⌋</div>
 
-    <div class="value" id="result">—</div>
-    <div class="hint" id="status">Toca el micro y di “54”.</div>
+<h2>🎙️ Di un número → 85% (redondeado hacia abajo)</h2>
 
-    <div class="mic" id="mic" aria-label="Hablar" role="button">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z"/>
-        <path d="M19 11a7 7 0 0 1-14 0"/>
-        <path d="M12 19v3"/>
-        <path d="M8 22h8"/>
-      </svg>
-    </div>
+<button id="btn">Pulsar y hablar (3s)</button>
 
-    <div class="row">
-      <div class="small" id="heard"></div>
-    </div>
+<p class="small">
+  Di un número como “54” o “cincuenta y cuatro”.
+</p>
 
-    <div class="small" id="compat"></div>
-  </div>
+<div class="card">
+  <div class="row"><span class="label">Estado:</span> <span id="status">Listo</span></div>
+  <div class="row"><span class="label">He oído:</span> <span id="heard" class="mono">—</span></div>
+  <div class="row"><span class="label">Número detectado:</span> <span id="num" class="mono">—</span></div>
+  <div class="row"><span class="label">Resultado (85%):</span> <span id="out" class="mono">—</span></div>
+  <div class="row small">Regla: <b>Math.floor(n × 0.85)</b></div>
+</div>
 
 <script>
-(() => {
-  const $mic    = document.getElementById('mic');
-  const $status = document.getElementById('status');
-  const $result = document.getElementById('result');
-  const $heard  = document.getElementById('heard');
-  const $compat = document.getElementById('compat');
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const canRec = !!SpeechRec;
-  const canTTS = 'speechSynthesis' in window;
+  const btn = document.getElementById("btn");
+  const statusEl = document.getElementById("status");
+  const heardEl = document.getElementById("heard");
+  const numEl = document.getElementById("num");
+  const outEl = document.getElementById("out");
 
-  $compat.textContent = canRec
-    ? 'Reconocimiento: OK · Voz: ' + (canTTS ? 'OK' : 'No')
-    : 'Este navegador no soporta reconocimiento de voz.';
-
-  // -------- TTS (iOS-friendly) --------
-  let ttsUnlocked = false;
-
-  function pickSpanishVoice() {
-    const voices = window.speechSynthesis?.getVoices?.() || [];
-    return voices.find(v => (v.lang || '').toLowerCase().startsWith('es-es'))
-        || voices.find(v => (v.lang || '').toLowerCase().startsWith('es'))
-        || null;
+  function setStatus(text) {
+    statusEl.textContent = text;
   }
 
-  if (canTTS) {
-    window.speechSynthesis.onvoiceschanged = () => {};
-    window.speechSynthesis.getVoices();
-  }
-
-  // Desbloquea TTS en gesto usuario (iOS)
-  function unlockTTS() {
-    if (!canTTS || ttsUnlocked) return;
+  function speak(text) {
     try {
-      const u = new SpeechSynthesisUtterance(' ');
-      u.lang = 'es-ES';
-      u.volume = 0; // mudo
-      u.rate = 1.0;
-      u.voice = pickSpanishVoice() || undefined;
-      window.speechSynthesis.speak(u);
-      ttsUnlocked = true;
-    } catch {}
-  }
-
-  function speak(text){
-    if(!canTTS) return;
-    try {
-      window.speechSynthesis.resume();
-      const u = new SpeechSynthesisUtterance(String(text));
-      u.lang = 'es-ES';
-      u.rate = 1.0;
-      u.volume = 1.0;
-      u.voice = pickSpanishVoice() || undefined;
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "es-ES";
       window.speechSynthesis.speak(u);
     } catch {}
   }
 
-  // -------- Parse / math --------
-  function parseNumber(raw){
-    if(!raw) return null;
-    const t = raw
-      .toLowerCase()
-      .replaceAll('€','')
-      .replaceAll('%','')
-      .replace(/\s+/g,'')
-      .replace(/\.(?=\d{3}(\D|$))/g,'')
-      .replaceAll(',','.');
-    const m = t.match(/-?\d+(\.\d+)?/);
-    if(!m) return null;
-    const n = Number(m[0]);
-    return Number.isFinite(n) ? n : null;
-  }
-
-  function discountFloor15(n){
+  // 🔢 85% redondeado hacia abajo
+  function calc85(n) {
     return Math.floor(n * 0.85);
   }
 
-  // -------- Recognition flow (tap → stop on silence) --------
-  let rec = null;
-  let finalText = '';
-  let interimText = '';
-  let isListening = false;
+  // 🧠 Conversión texto → número (básico)
+  function parseNumber(text) {
+    text = text.toLowerCase();
 
-  function cleanup() {
-    if (rec) {
-      try { rec.onresult = rec.onerror = rec.onend = rec.onspeechend = null; } catch {}
-      rec = null;
+    // Si viene como número directo
+    const digit = text.match(/\d+/);
+    if (digit) return parseInt(digit[0], 10);
+
+    const map = {
+      cero: 0, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4,
+      cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9,
+      diez: 10, once: 11, doce: 12, trece: 13, catorce: 14, quince: 15,
+      dieciseis: 16, diecisiete: 17, dieciocho: 18, diecinueve: 19,
+      veinte: 20, treinta: 30, cuarenta: 40, cincuenta: 50,
+      sesenta: 60, setenta: 70, ochenta: 80, noventa: 90
+    };
+
+    let total = 0;
+    let parts = text.split(" ");
+
+    for (let i = 0; i < parts.length; i++) {
+      if (map[parts[i]] !== undefined) {
+        total += map[parts[i]];
+      }
     }
-    isListening = false;
-    $mic.classList.remove('on');
+
+    return total || null;
   }
 
-  function forceStop() {
-    if (!rec) return;
-    try { rec.stop(); } catch {}
-  }
-
-  function startListening() {
-    if (!canRec) {
-      $status.textContent = 'Tu navegador no puede escucharte.';
-      setTimeout(() => speak('Tu navegador no puede reconocer voz.'), 120);
+  btn.onclick = () => {
+    if (!SpeechRecognition) {
+      alert("Tu navegador no soporta reconocimiento de voz.");
       return;
     }
-    if (isListening) return;
 
-    isListening = true;
-    finalText = '';
-    interimText = '';
-    $heard.textContent = '';
-    $status.textContent = 'Escuchando…';
-    $mic.classList.add('on');
+    const recog = new SpeechRecognition();
+    recog.lang = "es-ES";
+    recog.interimResults = false;
 
-    rec = new SpeechRec();
-    rec.lang = 'es-ES';
-    rec.interimResults = true;
-    rec.continuous = false;
+    setStatus("Escuchando…");
+    btn.disabled = true;
 
-    // ✅ clave Android 14: parar cuando detecta fin de habla
-    rec.onspeechend = () => {
-      forceStop();
+    let transcript = "";
+
+    recog.onresult = e => {
+      transcript = e.results[0][0].transcript;
+      heardEl.textContent = transcript;
     };
 
-    rec.onresult = (e) => {
-      interimText = '';
-      for (let i = e.resultIndex; i < e.results.length; i++){
-        const txt = e.results[i][0].transcript;
-        if (e.results[i].isFinal) finalText += txt;
-        else interimText += txt;
-      }
-      const shown = (finalText || interimText || '').trim();
-      $heard.textContent = shown ? `Oído: ${shown}` : '';
+    recog.onerror = () => {
+      setStatus("Error al escuchar");
+      btn.disabled = false;
     };
 
-    rec.onerror = () => {
-      $status.textContent = 'No te he entendido.';
-      setTimeout(() => speak('No te he entendido.'), 120);
-      cleanup();
-    };
-
-    rec.onend = () => {
-      const heard = (finalText || interimText || '').trim();
-      cleanup();
-
-      if (!heard) {
-        $status.textContent = 'Di solo un número (ej: “54”).';
-        setTimeout(() => speak('No he entendido el número.'), 120);
+    recog.onend = () => {
+      if (!transcript) {
+        setStatus("No entendí nada");
+        speak("No te he entendido");
+        btn.disabled = false;
         return;
       }
 
-      const n = parseNumber(heard);
-      if (n === null) {
-        $status.textContent = 'Di solo un número (ej: “54”).';
-        setTimeout(() => speak('No he entendido el número.'), 120);
+      const number = parseNumber(transcript);
+
+      if (number === null || isNaN(number)) {
+        setStatus("No pude detectar un número");
+        speak("No pude detectar un número");
+        btn.disabled = false;
         return;
       }
 
-      const r = discountFloor15(n);
-      $result.textContent = r;
-      $status.textContent = 'Listo.';
-      // iOS Safari: micro-delay para que no lo ignore
-      setTimeout(() => speak(r), 120);
+      const result = calc85(number);
+
+      numEl.textContent = number;
+      outEl.textContent = result;
+
+      setStatus("Listo ✅");
+      speak(`El ochenta y cinco por ciento de ${number} es ${result}`);
+
+      btn.disabled = false;
     };
 
-    try {
-      rec.start();
-    } catch {
-      $status.textContent = 'No puedo iniciar el micro (permiso?).';
-      setTimeout(() => speak('No puedo iniciar el micrófono.'), 120);
-      cleanup();
-      return;
-    }
-  }
+    recog.start();
 
-  // -------- Single tap handler --------
-  $mic.addEventListener('click', (e) => {
-    e.preventDefault();
-    unlockTTS(); // iOS: desbloquea voz en el gesto
-
-    // si está escuchando, un tap extra corta y procesa
-    if (isListening) {
-      $status.textContent = 'Procesando…';
-      forceStop();
-      return;
-    }
-
-    startListening();
-  }, { passive: false });
-
-  $mic.addEventListener('contextmenu', (e) => e.preventDefault());
-
-})();
+    // ⏱️ detener tras 3 segundos
+    setTimeout(() => {
+      try { recog.stop(); } catch {}
+    }, 3000);
+  };
 </script>
+
 </body>
 </html>

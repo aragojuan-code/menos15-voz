@@ -64,9 +64,7 @@
       transition: transform .08s ease, background .12s ease;
       user-select:none;
       -webkit-user-select:none;
-
-      /* clave móvil: evita scroll/gestos que cancelan el hold */
-      touch-action:none;
+      touch-action:manipulation;
     }
     .mic:active{ transform: scale(.98); }
     .mic.on{
@@ -74,20 +72,17 @@
       color:#0b0f14;
     }
     .mic svg{ width:40px;height:40px; }
-    .small{
-      font-size:12px;color:var(--muted);
-      opacity:.85;
-    }
+    .small{ font-size:12px; color:var(--muted); opacity:.85; }
     .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
   </style>
 </head>
 
 <body>
   <div class="wrap">
-    <div class="chip">Di un número → te digo ⌊0,85×n⌋</div>
+    <div class="chip">Toca una vez → tienes 3s → te digo ⌊0,85×n⌋</div>
 
     <div class="value" id="result">—</div>
-    <div class="hint" id="status">Mantén pulsado el micro, di “54”, suelta.</div>
+    <div class="hint" id="status">Toca el micro y di “54”.</div>
 
     <div class="mic" id="mic" aria-label="Hablar" role="button">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -108,22 +103,23 @@
 
 <script>
 (() => {
+  const LISTEN_MS = 3000;
+
   const $mic    = document.getElementById('mic');
   const $status = document.getElementById('status');
   const $result = document.getElementById('result');
   const $heard  = document.getElementById('heard');
   const $compat = document.getElementById('compat');
 
-  // --- Compat ---
   const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
   const canRec = !!SpeechRec;
   const canTTS = 'speechSynthesis' in window;
 
   $compat.textContent = canRec
     ? 'Reconocimiento: OK · Voz: ' + (canTTS ? 'OK' : 'No')
-    : 'Este navegador no soporta reconocimiento de voz (iPhone/Safari puede fallar).';
+    : 'Este navegador no soporta reconocimiento de voz.';
 
-  // --- TTS (iOS-friendly) ---
+  // -------- TTS (iOS-friendly) --------
   let ttsUnlocked = false;
 
   function pickSpanishVoice() {
@@ -133,19 +129,17 @@
         || null;
   }
 
-  // fuerza carga de voces
   if (canTTS) {
     window.speechSynthesis.onvoiceschanged = () => {};
     window.speechSynthesis.getVoices();
   }
 
-  // Desbloquea TTS en gesto usuario (iOS)
   function unlockTTS() {
     if (!canTTS || ttsUnlocked) return;
     try {
       const u = new SpeechSynthesisUtterance(' ');
       u.lang = 'es-ES';
-      u.volume = 0;   // mudo
+      u.volume = 0; // mudo
       u.rate = 1.0;
       u.voice = pickSpanishVoice() || undefined;
       window.speechSynthesis.speak(u);
@@ -166,7 +160,7 @@
     } catch {}
   }
 
-  // --- Parse número (acepta "54", "54,5", "1.000", etc.) ---
+  // -------- Parse / math --------
   function parseNumber(raw){
     if(!raw) return null;
     const t = raw
@@ -174,33 +168,53 @@
       .replaceAll('€','')
       .replaceAll('%','')
       .replace(/\s+/g,'')
-      .replace(/\.(?=\d{3}(\D|$))/g,'') // quita miles tipo 1.000
-      .replaceAll(',','.');             // decimal europeo -> punto
+      .replace(/\.(?=\d{3}(\D|$))/g,'')
+      .replaceAll(',','.');
     const m = t.match(/-?\d+(\.\d+)?/);
     if(!m) return null;
     const n = Number(m[0]);
     return Number.isFinite(n) ? n : null;
   }
 
-  // --- Regla: sin decimales y 15% o MÁS (nunca menos) ---
   function discountFloor15(n){
     return Math.floor(n * 0.85);
   }
 
-  // --- Speech Recognition ---
+  // -------- Recognition flow (tap → 3s) --------
   let rec = null;
   let finalText = '';
+  let interimText = '';
+  let stopTimer = null;
+  let isListening = false;
 
-  function start(){
-    if(!canRec){
-      $status.textContent = 'Este navegador no puede escucharte. Usa Chrome/Edge o versión con Whisper.';
-      speak('Este navegador no puede reconocer voz.');
+  function cleanup() {
+    if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; }
+    if (rec) {
+      try { rec.onresult = rec.onerror = rec.onend = null; } catch {}
+      rec = null;
+    }
+    isListening = false;
+    $mic.classList.remove('on');
+  }
+
+  function forceStop() {
+    if (!rec) return;
+    try { rec.stop(); } catch {}
+  }
+
+  function startListening() {
+    if (!canRec) {
+      $status.textContent = 'Tu navegador no puede escucharte.';
+      setTimeout(() => speak('Tu navegador no puede reconocer voz.'), 120);
       return;
     }
+    if (isListening) return;
 
+    isListening = true;
     finalText = '';
+    interimText = '';
     $heard.textContent = '';
-    $status.textContent = 'Escuchando…';
+    $status.textContent = 'Escuchando… (3s)';
     $mic.classList.add('on');
 
     rec = new SpeechRec();
@@ -209,34 +223,36 @@
     rec.continuous = false;
 
     rec.onresult = (e) => {
-      let interim = '';
+      interimText = '';
       for (let i = e.resultIndex; i < e.results.length; i++){
         const txt = e.results[i][0].transcript;
         if (e.results[i].isFinal) finalText += txt;
-        else interim += txt;
+        else interimText += txt;
       }
-      const shown = (finalText || interim || '').trim();
+      const shown = (finalText || interimText || '').trim();
       $heard.textContent = shown ? `Oído: ${shown}` : '';
     };
 
     rec.onerror = () => {
       $status.textContent = 'No te he entendido.';
-      $mic.classList.remove('on');
+      // iOS: mejor hablar con delay
+      setTimeout(() => speak('No te he entendido.'), 120);
+      cleanup();
     };
 
     rec.onend = () => {
-      $mic.classList.remove('on');
+      // Se llama al parar (timer o por sí mismo)
+      const heard = (finalText || interimText || '').trim();
+      cleanup();
 
-      const heard = (finalText || '').trim();
-      if(!heard){
+      if (!heard) {
         $status.textContent = 'Di solo un número (ej: “54”).';
-        // iOS: también con delay
         setTimeout(() => speak('No he entendido el número.'), 120);
         return;
       }
 
       const n = parseNumber(heard);
-      if(n === null){
+      if (n === null) {
         $status.textContent = 'Di solo un número (ej: “54”).';
         setTimeout(() => speak('No he entendido el número.'), 120);
         return;
@@ -245,89 +261,42 @@
       const r = discountFloor15(n);
       $result.textContent = r;
       $status.textContent = 'Listo.';
-
-      // iOS Safari: hablar con micro-delay para que no lo ignore
+      // iOS Safari: micro-delay para que no lo ignore
       setTimeout(() => speak(r), 120);
     };
 
-    try { rec.start(); }
-    catch {
+    try {
+      rec.start();
+    } catch {
       $status.textContent = 'No puedo iniciar el micro (permiso?).';
-      $mic.classList.remove('on');
+      setTimeout(() => speak('No puedo iniciar el micrófono.'), 120);
+      cleanup();
+      return;
     }
+
+    // Para automáticamente a los 3 segundos
+    stopTimer = setTimeout(() => {
+      forceStop();
+    }, LISTEN_MS);
   }
 
-  function stop(){
-    if(rec){
-      try { rec.stop(); } catch {}
-    }
-  }
-
-  // ==============================
-  // UX: mantener pulsado (Android+iOS robusto)
-  // ==============================
-
-  // Evita menú de pulsación larga (iOS/Android)
-  $mic.addEventListener('contextmenu', (e) => e.preventDefault());
-
-  let isPressed = false;
-  let activePointerId = null;
-
-  const pressStart = (e) => {
+  // -------- Single tap handler --------
+  $mic.addEventListener('click', (e) => {
     e.preventDefault();
-    if (isPressed) return;
-    isPressed = true;
-
-    // unlock TTS en el gesto (iOS)
+    // desbloquea TTS en el gesto (iOS)
     unlockTTS();
 
-    // captura el puntero (Android: no se “pierde” con micro-movimientos)
-    if (e.pointerId != null && $mic.setPointerCapture) {
-      activePointerId = e.pointerId;
-      try { $mic.setPointerCapture(activePointerId); } catch {}
+    // si está escuchando, un tap extra cancela y finaliza ya
+    if (isListening) {
+      $status.textContent = 'Procesando…';
+      forceStop();
+      return;
     }
+    startListening();
+  }, { passive: false });
 
-    start();
-  };
-
-  const pressEnd = (e) => {
-    e.preventDefault();
-    if (!isPressed) return;
-
-    // si es pointer, asegúrate de terminar solo el puntero activo
-    if (e.pointerId != null && activePointerId != null && e.pointerId !== activePointerId) return;
-
-    isPressed = false;
-    activePointerId = null;
-    stop();
-  };
-
-  // Bloquea scroll/drag mientras grabas (Android manda cancel si no)
-  const blockMove = (e) => {
-    if (!isPressed) return;
-    e.preventDefault();
-  };
-
-  if ('PointerEvent' in window) {
-    // SOLO pointer (evita dobles eventos en Android)
-    $mic.addEventListener('pointerdown', pressStart, { passive: false });
-
-    // termina SOLO con up/cancel (NO pointerleave)
-    window.addEventListener('pointerup', pressEnd, { passive: false });
-    window.addEventListener('pointercancel', pressEnd, { passive: false });
-
-    // evita que al mover el dedo cancele
-    window.addEventListener('pointermove', blockMove, { passive: false });
-  } else {
-    // Fallback
-    $mic.addEventListener('touchstart', pressStart, { passive: false });
-    window.addEventListener('touchend', pressEnd, { passive: false });
-    window.addEventListener('touchcancel', pressEnd, { passive: false });
-    window.addEventListener('touchmove', blockMove, { passive: false });
-
-    $mic.addEventListener('mousedown', pressStart, { passive: false });
-    window.addEventListener('mouseup', pressEnd, { passive: false });
-  }
+  // Evita menú de pulsación larga (por si acaso)
+  $mic.addEventListener('contextmenu', (e) => e.preventDefault());
 
 })();
 </script>
